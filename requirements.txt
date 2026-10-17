@@ -1,0 +1,22 @@
+# Sentinel AI - Autonomous Driver Monitoring System
+# Core Dependencies
+
+# GUI & Futuristic HUD Interface
+PySide6>=6.6.0
+
+# Real-Time Computer Vision & Landmark Extraction
+opencv-python>=4.8.0
+mediapipe>=0.10.9
+
+# Deep Learning (ResNet-18 Eye Texture Verification)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Fast Numerical Computations & Array Processing
+numpy>=1.24.0
+
+# Audio Alert Engine (Acoustic Synthesizer Fallback)
+sounddevice>=0.4.6
+
+# Image Loading & Preprocessing
+Pillow>=9.5.0
