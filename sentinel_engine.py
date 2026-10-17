@@ -70,8 +70,17 @@ class TelemetrySnapshot:
     distraction_duration: float = 0.0
     distraction_state: str = "FORWARD ROAD" # "FORWARD ROAD" | "MIRROR CHECK" | "DISTRACTED"
 
+    # Oral Fatigue (Yawn), Head Droop & Composite Index
+    mar: float = 0.0               # Mouth Aspect Ratio
+    is_yawning: bool = False
+    yawn_duration: float = 0.0
+    yawn_count: int = 0
+    head_droop_count: int = 0
+    composite_fatigue_score: int = 0  # 0 - 100 Index
+    fatigue_tier: str = "ALERT"    # "ALERT" (0-39) | "MODERATE" (40-69) | "CRITICAL" (70-100)
+
     alert_level: int = 0           # 0: Nominal, 1: Advisory, 2: Warning, 3: Critical
-    alert_reason: str = "NOMINAL"  # "NOMINAL" | "MICROSLEEP" | "DISTRACTION" | "FATIGUE"
+    alert_reason: str = "NOMINAL"  # "NOMINAL" | "MICROSLEEP" | "DISTRACTION" | "FATIGUE" | "COFFEE_ADVISORY"
 
     total_blinks: int = 0
     blinks_per_min: float = 0.0
@@ -283,6 +292,14 @@ class SentinelPipelineWorker(QThread):
         self.perclos_history = collections.deque(maxlen=900)
         self.session_start_time = time.time()
 
+        # Oral Fatigue (Yawn) & Head Droop Modeling
+        self.mar_threshold = 0.58
+        self.yawn_duration_sec = 1.80
+        self.yawn_start_time: Optional[float] = None
+        self.yawn_count = 0
+        self.head_nod_start_time: Optional[float] = None
+        self.head_droop_count = 0
+
         # Initialize Asynchronous Neural Engine & Audio Daemon
         self.neural_engine = AsyncResNetWorker(self.weights_path)
         self.device = self.neural_engine.device
@@ -397,6 +414,27 @@ class SentinelPipelineWorker(QThread):
         d_v2 = np.linalg.norm(pts[2] - pts[4])
         d_h = np.linalg.norm(pts[0] - pts[3]) + 1e-6
         return float((d_v1 + d_v2) / (2.0 * d_h))
+
+    @staticmethod
+    def _calculate_mar(landmarks, w: int, h: int) -> float:
+        """
+        Calculates Mouth Aspect Ratio (MAR) for real-time oral yawn detection.
+        Uses 3 vertical inner-lip pairs and horizontal mouth corner distance.
+        """
+        p13 = np.array([landmarks[13].x * w, landmarks[13].y * h])
+        p14 = np.array([landmarks[14].x * w, landmarks[14].y * h])
+        p82 = np.array([landmarks[82].x * w, landmarks[82].y * h])
+        p87 = np.array([landmarks[87].x * w, landmarks[87].y * h])
+        p312 = np.array([landmarks[312].x * w, landmarks[312].y * h])
+        p317 = np.array([landmarks[317].x * w, landmarks[317].y * h])
+        p61 = np.array([landmarks[61].x * w, landmarks[61].y * h])
+        p291 = np.array([landmarks[291].x * w, landmarks[291].y * h])
+
+        d_v1 = np.linalg.norm(p13 - p14)
+        d_v2 = np.linalg.norm(p82 - p87)
+        d_v3 = np.linalg.norm(p312 - p317)
+        d_h = np.linalg.norm(p61 - p291) + 1e-6
+        return float((d_v1 + d_v2 + d_v3) / (2.0 * d_h))
 
     def _extract_eye_crop(self, frame, landmarks, indices, w: int, h: int, pad_scale: float = 0.55):
         xs = [int(landmarks[idx].x * w) for idx in indices]
@@ -579,15 +617,64 @@ class SentinelPipelineWorker(QThread):
         telemetry.total_blinks = self.total_blinks
         telemetry.microsleep_events = self.microsleep_count
 
-        # 7. Fatigue & Multi-Hazard Alarm Triggering
-        nodding_penalty = 0.25 if pitch > 18.0 else 0.0
-        distraction_penalty = min(telemetry.distraction_duration / 2.0, 0.5) if telemetry.distraction_state != "FORWARD ROAD" else 0.0
-        raw_fatigue = (telemetry.perclos_pct / 100.0 * 0.5) + (min(telemetry.closure_duration / 1.5, 1.0) * 0.4) + nodding_penalty + distraction_penalty
-        telemetry.fatigue_score = round(float(np.clip(raw_fatigue, 0.0, 1.0)), 2)
+        # 7. ORAL FATIGUE (MAR / YAWN DETECTION)
+        mar = self._calculate_mar(landmarks, w, h)
+        telemetry.mar = round(mar, 3)
 
-        # Alarm Logic:
+        if mar >= self.mar_threshold:
+            if self.yawn_start_time is None:
+                self.yawn_start_time = now
+            yawn_dur = now - self.yawn_start_time
+            telemetry.yawn_duration = round(yawn_dur, 2)
+            if yawn_dur >= self.yawn_duration_sec:
+                telemetry.is_yawning = True
+        else:
+            if self.yawn_start_time is not None:
+                past_dur = now - self.yawn_start_time
+                if past_dur >= self.yawn_duration_sec:
+                    self.yawn_count += 1
+                self.yawn_start_time = None
+            telemetry.is_yawning = False
+            telemetry.yawn_duration = 0.0
+
+        telemetry.yawn_count = self.yawn_count
+
+        # 8. HEAD NODDING / DROOP DETECTION
+        if pitch > 22.0:
+            if self.head_nod_start_time is None:
+                self.head_nod_start_time = now
+            nod_dur = now - self.head_nod_start_time
+            if nod_dur >= 1.20:
+                self.head_droop_count += 1
+                self.head_nod_start_time = None
+        else:
+            self.head_nod_start_time = None
+        telemetry.head_droop_count = self.head_droop_count
+
+        # 9. COMPOSITE DRIVER FATIGUE SCORE (Euro NCAP / Industrial DMS Formula)
+        # Fatigue Index = w1*PERCLOS + w2*ClosureDuration + w3*YawnFrequency + w4*HeadDroop + w5*Distraction
+        perclos_w = min(telemetry.perclos_pct, 100.0) * 0.35
+        closure_w = min(telemetry.closure_duration / 1.5, 1.0) * 35.0
+        yawn_w = min(self.yawn_count * 10.0 + (18.0 if telemetry.is_yawning else 0.0), 30.0)
+        nod_w = min(self.head_droop_count * 15.0 + (15.0 if pitch > 20.0 else 0.0), 25.0)
+        dist_w = min(telemetry.distraction_duration / 1.8, 1.0) * 20.0 if telemetry.distraction_state == "DISTRACTED" else 0.0
+
+        raw_index = int(np.clip(perclos_w + closure_w + yawn_w + nod_w + dist_w, 0, 100))
+        telemetry.composite_fatigue_score = raw_index
+        telemetry.fatigue_score = round(raw_index / 100.0, 2)
+
+        # Fatigue Tiers: ALERT (0-39) | MODERATE (40-69) | CRITICAL (70-100)
+        if raw_index >= 70 or telemetry.closure_duration >= self.critical_closure_sec or telemetry.distraction_duration >= self.distraction_threshold_sec:
+            telemetry.fatigue_tier = "CRITICAL"
+        elif raw_index >= 40 or self.yawn_count >= 2 or telemetry.is_yawning:
+            telemetry.fatigue_tier = "MODERATE"
+        else:
+            telemetry.fatigue_tier = "ALERT"
+
+        # 10. MULTI-HAZARD ALARM TRIGGERING
         # 1) Micro-sleep Hazard: Eyes closed >= 1.50s OR PERCLOS > 65%
         # 2) Prolonged Distraction Hazard: Head turned away >= 1.80s
+        # 3) Composite Fatigue Hazard: Tier == CRITICAL
         if telemetry.closure_duration >= self.critical_closure_sec or telemetry.perclos_pct > 65.0:
             telemetry.alert_level = 3
             telemetry.alert_reason = "MICROSLEEP"
@@ -596,11 +683,15 @@ class SentinelPipelineWorker(QThread):
             telemetry.alert_level = 3
             telemetry.alert_reason = "DISTRACTION"
             self.audio.set_level(3)
-        elif telemetry.closure_duration >= self.warning_closure_sec or telemetry.distraction_duration >= 1.20 or telemetry.perclos_pct > 35.0:
+        elif telemetry.fatigue_tier == "CRITICAL":
+            telemetry.alert_level = 3
+            telemetry.alert_reason = "FATIGUE"
+            self.audio.set_level(3)
+        elif telemetry.fatigue_tier == "MODERATE" or telemetry.closure_duration >= self.warning_closure_sec or telemetry.distraction_duration >= 1.20:
             telemetry.alert_level = 2
-            telemetry.alert_reason = "WARNING"
+            telemetry.alert_reason = "COFFEE_ADVISORY" if (telemetry.is_yawning or self.yawn_count >= 2) else "WARNING"
             self.audio.set_level(0) # Visual caution only
-        elif telemetry.perclos_pct > 18.0 or nodding_penalty > 0 or telemetry.distraction_state == "MIRROR CHECK":
+        elif telemetry.perclos_pct > 15.0 or pitch > 18.0 or telemetry.distraction_state == "MIRROR CHECK":
             telemetry.alert_level = 1
             telemetry.alert_reason = "ADVISORY"
             self.audio.set_level(0)

@@ -338,6 +338,10 @@ class ChromeCameraHUDWidget(QWidget):
             bg_col = QColor(255, 30, 86, flash_alpha)
             main_msg = f"⚠ CRITICAL WARNING: WAKE UP! (EYES CLOSED {self.telemetry.closure_duration:.1f}s)"
             sub_msg = "PULL OVER TO A SAFE LOCATION IMMEDIATELY"
+        elif self.telemetry.alert_reason == "COFFEE_ADVISORY" or self.telemetry.is_yawning:
+            bg_col = QColor(245, 158, 11, flash_alpha)
+            main_msg = "☕ REST ADVISORY: ORAL YAWNING & FATIGUE DETECTED"
+            sub_msg = f"YAWN COUNT: {self.telemetry.yawn_count} | FATIGUE SCORE: {self.telemetry.composite_fatigue_score}/100"
         else:
             bg_col = QColor(245, 158, 11, flash_alpha)
             main_msg = "⚠ ATTENTION: SLUGGISH APERTURE ADVISORY"
@@ -918,6 +922,14 @@ class SentinelMainWindow(QMainWindow):
         self.lbl_distractions.setStyleSheet("font-family: Consolas; font-size: 11px; font-weight: bold; color: #34D399;")
         metrics_grid.addWidget(self.lbl_distractions, 1, 1)
 
+        self.lbl_yawns = QLabel("YAWNS: 0 (MAR: 0.00)")
+        self.lbl_yawns.setStyleSheet("font-family: Consolas; font-size: 11px; font-weight: bold; color: #F59E0B;")
+        metrics_grid.addWidget(self.lbl_yawns, 2, 0)
+
+        self.lbl_fatigue_tier = QLabel("TIER: ALERT (0/100)")
+        self.lbl_fatigue_tier.setStyleSheet("font-family: Consolas; font-size: 11px; font-weight: bold; color: #38BDF8;")
+        metrics_grid.addWidget(self.lbl_fatigue_tier, 2, 1)
+
         hbox.addLayout(metrics_grid, stretch=3)
 
         self.vital_waveform = ChromeVitalWaveformWidget()
@@ -1103,6 +1115,9 @@ class SentinelMainWindow(QMainWindow):
                 else:
                     self.shield_status_lbl.setText("● HAZARD: CRITICAL MICRO-SLEEP")
                 self.shield_status_lbl.setStyleSheet("background: #FF1E56; color: white; border-radius: 14px; padding: 5px 14px; font-size: 10px; font-weight: bold;")
+            elif tel.alert_reason == "COFFEE_ADVISORY" or tel.is_yawning:
+                self.shield_status_lbl.setText(f"● ☕ REST ADVISORY: YAWNING DETECTED ({tel.yawn_count})")
+                self.shield_status_lbl.setStyleSheet("background: rgba(245, 158, 11, 0.25); border: 1px solid #F59E0B; border-radius: 14px; padding: 5px 14px; font-size: 10px; font-weight: bold; color: #F59E0B;")
             elif tel.alert_level == 2:
                 self.shield_status_lbl.setText("● WARNING: EARLY FATIGUE DETECTED")
                 self.shield_status_lbl.setStyleSheet("background: rgba(245, 158, 11, 0.2); border: 1px solid #F59E0B; border-radius: 14px; padding: 5px 14px; font-size: 10px; font-weight: bold; color: #F59E0B;")
@@ -1121,6 +1136,12 @@ class SentinelMainWindow(QMainWindow):
             self.lbl_microsleeps.setText(f"DROWSY EVENTS: {tel.microsleep_events}")
             self.lbl_distractions.setText(f"DISTRACTIONS: {tel.distraction_events}")
 
+            yawn_str = f"YAWNING ({tel.yawn_duration:.1f}s)" if tel.is_yawning else f"YAWNS: {tel.yawn_count} (MAR: {tel.mar:.2f})"
+            self.lbl_yawns.setText(yawn_str)
+            tier_col = "#FF1E56" if tel.fatigue_tier == "CRITICAL" else ("#F59E0B" if tel.fatigue_tier == "MODERATE" else "#38BDF8")
+            self.lbl_fatigue_tier.setText(f"TIER: {tel.fatigue_tier} ({tel.composite_fatigue_score}/100)")
+            self.lbl_fatigue_tier.setStyleSheet(f"font-family: Consolas; font-size: 11px; font-weight: bold; color: {tier_col};")
+
             self.vital_waveform.add_sample(tel.fatigue_score)
 
             # Trip Safety Summary
@@ -1130,6 +1151,9 @@ class SentinelMainWindow(QMainWindow):
                 f"• Natural Blink Rate: {tel.blinks_per_min:.1f} Blinks / Minute\n\n"
                 f"• Micro-Sleep Incidents: {tel.microsleep_events}\n\n"
                 f"• Prolonged Distractions (>1.8s): {tel.distraction_events}\n\n"
+                f"• Oral Yawn Frequency: {tel.yawn_count} Yawns Logged (MAR: {tel.mar:.2f})\n\n"
+                f"• Head Droop / Nodding Events: {tel.head_droop_count}\n\n"
+                f"• Composite Euro NCAP Fatigue Score: {tel.composite_fatigue_score}/100 [{tel.fatigue_tier}]\n\n"
                 f"• Driver Alertness Index: {alertness_val}% ({self.vigilance_core.status_title})\n\n"
                 f"• Current Road Focus: {tel.distraction_state}"
             )

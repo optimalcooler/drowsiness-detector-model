@@ -146,6 +146,80 @@ The eye verification classifier is trained on the **MRL Infrared Eye Images Data
 
 ---
 
+## 🔮 System Evolution & Next-Gen DMS Architecture
+
+To advance beyond static frame classification and meet production Tier-1 automotive and Euro NCAP 2026+ active safety protocols, Sentinel AI implements an industrial multi-factor fatigue scoring framework and roadmap:
+
+### 1. Composite Driver Fatigue Score (Industrial DMS Formula)
+
+Relying solely on immediate eye closure is insufficient for early accident prevention. Drowsiness progresses through distinct physiological stages: yawning, increased blink duration, reduced saccadic velocity, and head nodding.
+
+Sentinel AI combines multiple weighted indicators into a single continuous 0–100 **Composite Fatigue Index**:
+
+$$\text{Fatigue Index} = w_1 \cdot \text{PERCLOS} + w_2 \cdot \text{Yawn Frequency (MAR)} + w_3 \cdot \text{Head Droop Events} + w_4 \cdot \text{Closure Duration} + w_5 \cdot \text{Distraction Offset}$$
+
+#### Multi-Tier Alert Escalation:
+- **🟢 Alert Tier (Score 0–39)**: Normal driving state. Gaze focused on road, natural blink rate (12–20/min). Ambient chrome HUD signals nominal status.
+- **🟡 Moderate Fatigue Tier (Score 40–69)**: Early drowsiness detected via frequent yawning ($\text{MAR} > 0.58$ sustained $> 1.8\text{s}$) or rising PERCLOS ($> 15\%$). Triggers an amber `☕ REST ADVISORY` coffee cup alert and subtle audio chime, prompting the driver to plan a stop *before* micro-sleep occurs.
+- **🔴 Critical Emergency Tier (Score 70–100)**: Active micro-sleep ($\text{EAR} < 0.24$ for $\ge 1.50\text{s}$) or prolonged off-road distraction ($\ge 1.80\text{s}$). Activates the high-priority dual-tone acoustic warble siren (2600 Hz ⇄ 3200 Hz) and crimson flashing hazard strobe.
+
+---
+
+### 2. Real-Time Geometric Landmark Modeling
+- **EAR (Eye Aspect Ratio)**:
+  $$\text{EAR} = \frac{\|p_2 - p_6\| + \|p_3 - p_5\|}{2 \cdot \|p_1 - p_4\|}$$
+  Distinguishes natural eye blinks (100–300 ms) from micro-sleeps ($\text{EAR} < 0.24$ for $> 1.50\text{s}$).
+- **MAR (Mouth Aspect Ratio)**:
+  $$\text{MAR} = \frac{\|p_{13} - p_{14}\| + \|p_{82} - p_{87}\| + \|p_{312} - p_{317}\|}{2 \cdot \|p_{61} - p_{291}\|}$$
+  Tracks inner lip vertical aperture against mouth width to log yawn frequency and duration ($\text{MAR} > 0.58$ for $> 1.8\text{s}$).
+- **PERCLOS (% of Eye Closure)**:
+  The gold-standard physiological metric measuring the percentage of time eyes are closed over a rolling 30-to-60 second window. A PERCLOS score $> 15\text{--}20\%$ indicates severe driver drowsiness.
+- **Head Droop & Nodding**:
+  Solves 3D head pitch via PnP. Forward drooping ($\text{pitch} > 22^\circ$ or dip below $-18^\circ$ with a slow rebound) identifies physical micro-sleep head drops.
+
+---
+
+### 3. Immediate-Mode HUD Pipeline vs. Traditional GUI Toolkits
+
+In addition to the PySide6 desktop interface, Sentinel supports an **Immediate-Mode HUD Rendering Pipeline** rendered directly into each raw video frame (OpenCV BGR NumPy array) for ultra-low latency headless environments:
+
+```
+Camera Frame (NumPy BGR Array)
+  │
+  ├── 1. In-place Graphic Primitives
+  │     ├── alpha_rect()              → Fast translucent glassmorphism via cv2.addWeighted
+  │     ├── gradient_bar()            → Vectorized RGB color interpolation via np.linspace & np.stack
+  │     ├── rounded_rect_border()    → Anti-aliased line segments + cv2.ellipse corner arcs
+  │     └── apply_scanline_vignette() → In-place bit-shift scanline overlay (frame[::3] >> 8)
+  │
+  ├── 2. Dual-Engine Typography System
+  │     ├── Fast Path (Latin/English): cv2.putText with Hershey fonts & 1px drop shadows
+  │     └── RTL/Unicode Path (Arabic & Multilingual):
+  │           • TrueType font rendering with LRU Bitmap Cache (MAX_ENTRIES = 512)
+  │           • Integer alpha-blending compositing directly onto OpenCV ROI
+  │
+  ├── 3. Dynamic Spatial HUD Modules
+  │     ├── Face Card: Adaptive floating box pinned to face bounding box with auto-repositioning
+  │     ├── 3D Indicators: Trigonometric Gaze Ray projection & 3-axis Head Pose rotation triad
+  │     └── Avionic Gaze Tape: Real-time mirror glance vs forward road horizontal compass
+  │
+  └── 4. Interactive Overlays & Events
+        ├── Keyboard toggles frosted glass system configuration modal
+        └── cv2.setMouseCallback tracks mouse coordinates against interactive HUD hitboxes
+```
+
+---
+
+### 4. Deep Learning Sequence Models & Pretrained Benchmarks
+
+| Model Architecture | Task | Strengths |
+| :--- | :--- | :--- |
+| **MobileNetV4 / FastViT + Bi-LSTM / GRU** | Temporal sequence classification on 16–32 consecutive frame crops | Captures dynamic patterns (gradual eyelid drooping, yawning micro-expressions) rather than single-frame snapshots. 4x–6x faster on CPU/NPU than standard ResNets. |
+| **YOLOv8-Face / YOLOv11n** | Object detection for eye & mouth states | Predicts bounding boxes for `eyes_open`, `eyes_closed`, `yawning`, `normal`. Extremely fast on NVIDIA RTX GPUs via TensorRT / ONNX. |
+| **Pretrained Benchmark Fine-Tuning** | Multi-condition transfer learning | Trained on multi-condition benchmark datasets: **NTHU-DDD** (National Tsing Hua University Drowsiness Dataset), **YawDD** (Yawning Detection Dataset), and **RLDD** (Real-life Drowsiness Dataset). |
+
+---
+
 ## 🚀 Quick Start
 
 ### 1. Prerequisites
