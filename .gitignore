@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Dataset images (84,900+ images - downloadable via links in readme.md)
+train/
+val/
+test/
